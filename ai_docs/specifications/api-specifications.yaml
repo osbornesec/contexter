@@ -1,0 +1,1405 @@
+openapi: 3.0.4
+info:
+  title: Contexter RAG System API
+  description: |
+    Comprehensive API for the Contexter Documentation Platform's RAG (Retrieval-Augmented Generation) system.
+    Provides endpoints for document ingestion, embedding generation, vector search, and system management.
+    
+    ## Features
+    - **Document Ingestion**: Automated processing of documentation with intelligent chunking
+    - **Semantic Search**: Hybrid search combining semantic similarity and keyword matching
+    - **Vector Management**: CRUD operations for vector embeddings with metadata
+    - **Health Monitoring**: System health checks and performance metrics
+    - **Administrative Controls**: Configuration management and system optimization
+    
+    ## Performance Targets
+    - Search latency p95 < 50ms, p99 < 100ms
+    - Ingestion throughput > 1000 documents/minute
+    - System availability > 99.9%
+  version: 2.0.0
+  contact:
+    name: Contexter Development Team
+    email: support@contexter.dev
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: http://localhost:8000/api/v1
+    description: Local development server
+  - url: https://api.contexter.dev/v1
+    description: Production server
+  - url: https://staging-api.contexter.dev/v1
+    description: Staging server
+
+security:
+  - apiKey: []
+  - bearerAuth: []
+
+paths:
+  # Document Ingestion Endpoints
+  /documents:
+    post:
+      summary: Ingest document for RAG processing
+      description: |
+        Submit a document for automatic ingestion into the RAG system. The document will be
+        parsed, chunked, embedded, and stored in the vector database for semantic search.
+      operationId: ingestDocument
+      tags:
+        - Document Ingestion
+      security:
+        - apiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DocumentIngestionRequest'
+            examples:
+              library_docs:
+                summary: Library documentation ingestion
+                value:
+                  library_id: "fastapi"
+                  version: "0.104.1"
+                  document_path: "/docs/fastapi/v0.104.1/documentation.json.gz"
+                  metadata:
+                    library_name: "FastAPI"
+                    category: "web_framework"
+                    language: "python"
+                    trust_score: 9.5
+                  priority: 1
+                  auto_process: true
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Documentation file (JSON, JSONL, or compressed)
+                metadata:
+                  type: string
+                  description: JSON string containing document metadata
+                library_id:
+                  type: string
+                  description: Unique identifier for the library
+      responses:
+        '201':
+          description: Document successfully queued for ingestion
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IngestionResponse'
+              example:
+                job_id: "ing_123456789"
+                status: "queued"
+                estimated_processing_time: 120
+                queue_position: 3
+                document_id: "doc_fastapi_0.104.1"
+        '400':
+          description: Invalid request data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: "validation_error"
+                message: "Invalid document format: expected JSON or JSONL"
+                details:
+                  field: "document_path"
+                  code: "INVALID_FORMAT"
+        '413':
+          description: Document too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: "document_too_large"
+                message: "Document size exceeds maximum limit of 100MB"
+                details:
+                  max_size: "100MB"
+                  actual_size: "150MB"
+        '429':
+          description: Rate limit exceeded
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+              description: Seconds to wait before retrying
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    get:
+      summary: List ingested documents
+      description: Retrieve a paginated list of documents that have been ingested into the RAG system
+      operationId: listDocuments
+      tags:
+        - Document Ingestion
+      security:
+        - apiKey: []
+      parameters:
+        - name: limit
+          in: query
+          description: Maximum number of documents to return
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: offset
+          in: query
+          description: Number of documents to skip for pagination
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: library_id
+          in: query
+          description: Filter by library identifier
+          schema:
+            type: string
+        - name: status
+          in: query
+          description: Filter by ingestion status
+          schema:
+            type: string
+            enum: [queued, processing, completed, failed]
+        - name: sort
+          in: query
+          description: Sort order for results
+          schema:
+            type: string
+            enum: [created_at, updated_at, library_id, status]
+            default: created_at
+        - name: order
+          in: query
+          description: Sort direction
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+      responses:
+        '200':
+          description: List of documents retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentListResponse'
+
+  /documents/{document_id}:
+    get:
+      summary: Get document details
+      description: Retrieve detailed information about a specific ingested document
+      operationId: getDocument
+      tags:
+        - Document Ingestion
+      security:
+        - apiKey: []
+      parameters:
+        - name: document_id
+          in: path
+          required: true
+          description: Unique identifier for the document
+          schema:
+            type: string
+            pattern: '^doc_[a-zA-Z0-9_-]+$'
+      responses:
+        '200':
+          description: Document details retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentDetail'
+        '404':
+          description: Document not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    delete:
+      summary: Remove document from RAG system
+      description: |
+        Remove a document and all its associated vectors from the RAG system.
+        This operation is irreversible and will affect search results.
+      operationId: deleteDocument
+      tags:
+        - Document Ingestion
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: document_id
+          in: path
+          required: true
+          description: Unique identifier for the document
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Document successfully deleted
+        '404':
+          description: Document not found
+        '403':
+          description: Insufficient permissions
+
+  /documents/{document_id}/status:
+    get:
+      summary: Get document processing status
+      description: Get real-time status information for document ingestion processing
+      operationId: getDocumentStatus
+      tags:
+        - Document Ingestion
+      security:
+        - apiKey: []
+      parameters:
+        - name: document_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Status information retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProcessingStatus'
+
+  # Search Endpoints
+  /search:
+    post:
+      summary: Perform semantic search
+      description: |
+        Execute a hybrid search query combining semantic similarity and keyword matching.
+        Returns ranked results with relevance scores and metadata.
+      operationId: semanticSearch
+      tags:
+        - Search
+      security:
+        - apiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SearchRequest'
+            examples:
+              basic_search:
+                summary: Basic semantic search
+                value:
+                  query: "How to create FastAPI endpoints with authentication"
+                  limit: 10
+                  threshold: 0.7
+              filtered_search:
+                summary: Search with filters
+                value:
+                  query: "async database queries"
+                  limit: 20
+                  threshold: 0.6
+                  filters:
+                    library_id: ["fastapi", "sqlalchemy"]
+                    doc_type: ["api", "guide"]
+                    language: ["python"]
+                  search_type: "hybrid"
+                  include_highlights: true
+      responses:
+        '200':
+          description: Search completed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchResponse'
+              example:
+                query: "How to create FastAPI endpoints with authentication"
+                results:
+                  - id: "chunk_fastapi_auth_001"
+                    score: 0.92
+                    semantic_score: 0.89
+                    keyword_score: 0.95
+                    content: "Creating secure FastAPI endpoints requires authentication middleware..."
+                    metadata:
+                      library_id: "fastapi"
+                      section: "authentication"
+                      doc_type: "guide"
+                    highlights:
+                      - "**FastAPI** endpoints with **authentication**"
+                      - "secure API **authentication** middleware"
+                execution_time_ms: 23
+                total_results: 156
+                page: 1
+                has_more: true
+        '400':
+          description: Invalid search request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /search/suggestions:
+    get:
+      summary: Get search query suggestions
+      description: Get autocomplete suggestions for search queries based on indexed content
+      operationId: getSearchSuggestions
+      tags:
+        - Search
+      security:
+        - apiKey: []
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: Partial query string for suggestions
+          schema:
+            type: string
+            minLength: 2
+            maxLength: 100
+        - name: limit
+          in: query
+          description: Maximum number of suggestions to return
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 20
+            default: 10
+      responses:
+        '200':
+          description: Suggestions retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuggestionsResponse'
+
+  # Vector Management Endpoints
+  /vectors:
+    post:
+      summary: Store vector embeddings
+      description: Directly store pre-computed vector embeddings with metadata
+      operationId: storeVectors
+      tags:
+        - Vector Management
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VectorBatchRequest'
+      responses:
+        '201':
+          description: Vectors stored successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VectorBatchResponse'
+        '400':
+          description: Invalid vector data
+        '413':
+          description: Batch too large
+
+    get:
+      summary: Query vector database
+      description: Perform direct vector similarity search with optional metadata filtering
+      operationId: queryVectors
+      tags:
+        - Vector Management
+      security:
+        - apiKey: []
+      parameters:
+        - name: vector
+          in: query
+          required: true
+          description: Query vector as comma-separated float values
+          schema:
+            type: string
+            pattern: '^-?\d+\.?\d*(,-?\d+\.?\d*)*$'
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: threshold
+          in: query
+          schema:
+            type: number
+            minimum: 0
+            maximum: 1
+            default: 0.7
+      responses:
+        '200':
+          description: Vector query completed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VectorQueryResponse'
+
+  # Embedding Generation Endpoints
+  /embeddings:
+    post:
+      summary: Generate text embeddings
+      description: |
+        Generate vector embeddings for text content using the configured embedding model.
+        Supports both single text and batch processing with intelligent caching.
+      operationId: generateEmbeddings
+      tags:
+        - Embeddings
+      security:
+        - apiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmbeddingRequest'
+            examples:
+              single_text:
+                summary: Single text embedding
+                value:
+                  texts: ["How to implement authentication in FastAPI"]
+                  input_type: "query"
+                  model: "voyage-code-3"
+              batch_texts:
+                summary: Batch text embedding
+                value:
+                  texts:
+                    - "FastAPI is a modern web framework for Python"
+                    - "SQLAlchemy provides powerful ORM capabilities"
+                    - "Pydantic enables data validation with type hints"
+                  input_type: "document"
+                  model: "voyage-code-3"
+      responses:
+        '200':
+          description: Embeddings generated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmbeddingResponse'
+        '400':
+          description: Invalid embedding request
+        '429':
+          description: Rate limit exceeded for embedding API
+
+  # Health and Monitoring Endpoints
+  /health:
+    get:
+      summary: System health check
+      description: Get comprehensive system health status including all components
+      operationId: getHealthStatus
+      tags:
+        - Health
+      responses:
+        '200':
+          description: System is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+              example:
+                status: "healthy"
+                timestamp: "2024-01-15T10:30:00Z"
+                version: "2.0.0"
+                components:
+                  vector_database:
+                    status: "healthy"
+                    response_time_ms: 12
+                    collections: 1
+                    total_vectors: 45623
+                  embedding_service:
+                    status: "healthy"
+                    response_time_ms: 89
+                    cache_hit_rate: 0.73
+                  ingestion_pipeline:
+                    status: "healthy"
+                    queue_length: 2
+                    workers_active: 3
+        '503':
+          description: System is unhealthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /metrics:
+    get:
+      summary: Get system metrics
+      description: Retrieve detailed performance metrics and statistics
+      operationId: getMetrics
+      tags:
+        - Health
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Metrics retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MetricsResponse'
+            text/plain:
+              schema:
+                type: string
+              description: Prometheus metrics format
+
+  # Administrative Endpoints
+  /admin/config:
+    get:
+      summary: Get system configuration
+      description: Retrieve current system configuration settings
+      operationId: getConfiguration
+      tags:
+        - Administration
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Configuration retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigurationResponse'
+
+    patch:
+      summary: Update system configuration
+      description: Update specific configuration parameters without service restart
+      operationId: updateConfiguration
+      tags:
+        - Administration
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConfigurationUpdate'
+      responses:
+        '200':
+          description: Configuration updated successfully
+        '400':
+          description: Invalid configuration values
+
+  /admin/cache/clear:
+    post:
+      summary: Clear system caches
+      description: Clear embedding cache and query cache to free memory
+      operationId: clearCache
+      tags:
+        - Administration
+      security:
+        - bearerAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                cache_types:
+                  type: array
+                  items:
+                    type: string
+                    enum: [embedding, query, all]
+                  default: ["all"]
+      responses:
+        '200':
+          description: Cache cleared successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  cleared_caches:
+                    type: array
+                    items:
+                      type: string
+                  memory_freed_mb:
+                    type: number
+
+components:
+  securitySchemes:
+    apiKey:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: API key for authentication
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT token for administrative operations
+
+  schemas:
+    DocumentIngestionRequest:
+      type: object
+      required:
+        - library_id
+        - document_path
+      properties:
+        library_id:
+          type: string
+          description: Unique identifier for the library
+          pattern: '^[a-zA-Z0-9_-]+$'
+          minLength: 1
+          maxLength: 100
+        version:
+          type: string
+          description: Library version identifier
+          maxLength: 50
+        document_path:
+          type: string
+          description: Path to the documentation file
+          format: uri-reference
+        metadata:
+          type: object
+          description: Additional metadata for the document
+          properties:
+            library_name:
+              type: string
+              description: Human-readable library name
+            category:
+              type: string
+              enum: [web_framework, database, machine_learning, utility, testing, other]
+            language:
+              type: string
+              description: Primary programming language
+            trust_score:
+              type: number
+              minimum: 0
+              maximum: 10
+              description: Quality/trust score for the library
+            star_count:
+              type: integer
+              minimum: 0
+              description: GitHub star count
+            tags:
+              type: array
+              items:
+                type: string
+              maxItems: 20
+          additionalProperties: true
+        priority:
+          type: integer
+          minimum: 0
+          maximum: 10
+          default: 5
+          description: Processing priority (0=lowest, 10=highest)
+        auto_process:
+          type: boolean
+          default: true
+          description: Whether to automatically start processing
+
+    IngestionResponse:
+      type: object
+      required:
+        - job_id
+        - status
+        - document_id
+      properties:
+        job_id:
+          type: string
+          description: Unique identifier for the ingestion job
+          pattern: '^ing_[a-zA-Z0-9]+$'
+        status:
+          type: string
+          enum: [queued, processing, completed, failed]
+        estimated_processing_time:
+          type: integer
+          description: Estimated processing time in seconds
+        queue_position:
+          type: integer
+          minimum: 0
+          description: Position in the processing queue
+        document_id:
+          type: string
+          description: Generated document identifier
+
+    DocumentListResponse:
+      type: object
+      required:
+        - documents
+        - pagination
+      properties:
+        documents:
+          type: array
+          items:
+            $ref: '#/components/schemas/DocumentSummary'
+        pagination:
+          $ref: '#/components/schemas/PaginationInfo'
+        total_count:
+          type: integer
+          description: Total number of documents matching filters
+
+    DocumentSummary:
+      type: object
+      required:
+        - document_id
+        - library_id
+        - status
+        - created_at
+      properties:
+        document_id:
+          type: string
+        library_id:
+          type: string
+        version:
+          type: string
+        status:
+          type: string
+          enum: [queued, processing, completed, failed]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        chunk_count:
+          type: integer
+          description: Number of chunks created from document
+        vector_count:
+          type: integer
+          description: Number of vectors stored
+
+    DocumentDetail:
+      allOf:
+        - $ref: '#/components/schemas/DocumentSummary'
+        - type: object
+          properties:
+            metadata:
+              type: object
+              additionalProperties: true
+            processing_stats:
+              type: object
+              properties:
+                total_tokens:
+                  type: integer
+                chunks_created:
+                  type: integer
+                embeddings_generated:
+                  type: integer
+                processing_time_seconds:
+                  type: number
+                errors:
+                  type: array
+                  items:
+                    type: string
+
+    ProcessingStatus:
+      type: object
+      required:
+        - status
+        - progress_percentage
+      properties:
+        status:
+          type: string
+          enum: [queued, parsing, chunking, embedding, storing, completed, failed]
+        progress_percentage:
+          type: number
+          minimum: 0
+          maximum: 100
+        current_step:
+          type: string
+          description: Human-readable description of current processing step
+        estimated_completion:
+          type: string
+          format: date-time
+        error_message:
+          type: string
+          description: Error message if processing failed
+
+    SearchRequest:
+      type: object
+      required:
+        - query
+      properties:
+        query:
+          type: string
+          description: Search query text
+          minLength: 1
+          maxLength: 1000
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 10
+          description: Maximum number of results to return
+        offset:
+          type: integer
+          minimum: 0
+          default: 0
+          description: Number of results to skip for pagination
+        threshold:
+          type: number
+          minimum: 0
+          maximum: 1
+          default: 0.7
+          description: Minimum similarity score threshold
+        search_type:
+          type: string
+          enum: [semantic, keyword, hybrid]
+          default: hybrid
+          description: Type of search to perform
+        filters:
+          type: object
+          description: Metadata filters to apply
+          properties:
+            library_id:
+              type: array
+              items:
+                type: string
+            doc_type:
+              type: array
+              items:
+                type: string
+            language:
+              type: array
+              items:
+                type: string
+            date_range:
+              type: object
+              properties:
+                start:
+                  type: string
+                  format: date-time
+                end:
+                  type: string
+                  format: date-time
+          additionalProperties:
+            oneOf:
+              - type: string
+              - type: array
+                items:
+                  type: string
+        include_highlights:
+          type: boolean
+          default: true
+          description: Whether to include highlighted snippets
+        rerank:
+          type: boolean
+          default: true
+          description: Whether to apply result reranking
+
+    SearchResponse:
+      type: object
+      required:
+        - query
+        - results
+        - execution_time_ms
+      properties:
+        query:
+          type: string
+          description: Original search query
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/SearchResult'
+        execution_time_ms:
+          type: number
+          description: Search execution time in milliseconds
+        total_results:
+          type: integer
+          description: Total number of matching results
+        page:
+          type: integer
+          description: Current page number
+        has_more:
+          type: boolean
+          description: Whether more results are available
+        aggregations:
+          type: object
+          description: Result aggregations by metadata fields
+          additionalProperties:
+            type: object
+
+    SearchResult:
+      type: object
+      required:
+        - id
+        - score
+        - content
+        - metadata
+      properties:
+        id:
+          type: string
+          description: Unique identifier for the result chunk
+        score:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Overall relevance score
+        semantic_score:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Semantic similarity score
+        keyword_score:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Keyword matching score
+        content:
+          type: string
+          description: Text content of the result
+        metadata:
+          type: object
+          description: Associated metadata
+          required:
+            - library_id
+          properties:
+            library_id:
+              type: string
+            library_name:
+              type: string
+            section:
+              type: string
+            doc_type:
+              type: string
+            chunk_index:
+              type: integer
+            total_chunks:
+              type: integer
+          additionalProperties: true
+        highlights:
+          type: array
+          items:
+            type: string
+          description: Highlighted text snippets with matching terms
+
+    SuggestionsResponse:
+      type: object
+      required:
+        - suggestions
+      properties:
+        suggestions:
+          type: array
+          items:
+            type: object
+            required:
+              - text
+              - score
+            properties:
+              text:
+                type: string
+                description: Suggested query text
+              score:
+                type: number
+                description: Relevance score for the suggestion
+              type:
+                type: string
+                enum: [completion, correction, related]
+                description: Type of suggestion
+
+    VectorBatchRequest:
+      type: object
+      required:
+        - vectors
+      properties:
+        vectors:
+          type: array
+          items:
+            $ref: '#/components/schemas/VectorData'
+          maxItems: 1000
+          description: Array of vectors to store
+
+    VectorData:
+      type: object
+      required:
+        - id
+        - vector
+        - metadata
+      properties:
+        id:
+          type: string
+          description: Unique identifier for the vector
+        vector:
+          type: array
+          items:
+            type: number
+            format: float
+          minItems: 2048
+          maxItems: 2048
+          description: 2048-dimensional embedding vector
+        metadata:
+          type: object
+          required:
+            - content
+          properties:
+            content:
+              type: string
+              description: Original text content
+            library_id:
+              type: string
+            chunk_index:
+              type: integer
+          additionalProperties: true
+
+    VectorBatchResponse:
+      type: object
+      required:
+        - stored_count
+        - failed_count
+      properties:
+        stored_count:
+          type: integer
+          description: Number of vectors successfully stored
+        failed_count:
+          type: integer
+          description: Number of vectors that failed to store
+        errors:
+          type: array
+          items:
+            type: object
+            properties:
+              vector_id:
+                type: string
+              error:
+                type: string
+
+    VectorQueryResponse:
+      type: object
+      required:
+        - results
+      properties:
+        results:
+          type: array
+          items:
+            type: object
+            required:
+              - id
+              - score
+              - metadata
+            properties:
+              id:
+                type: string
+              score:
+                type: number
+              metadata:
+                type: object
+
+    EmbeddingRequest:
+      type: object
+      required:
+        - texts
+      properties:
+        texts:
+          type: array
+          items:
+            type: string
+            maxLength: 8000
+          minItems: 1
+          maxItems: 100
+          description: Array of texts to embed
+        input_type:
+          type: string
+          enum: [document, query]
+          default: document
+          description: Type of input for optimized embedding
+        model:
+          type: string
+          enum: [voyage-code-3]
+          default: voyage-code-3
+          description: Embedding model to use
+
+    EmbeddingResponse:
+      type: object
+      required:
+        - embeddings
+        - model
+      properties:
+        embeddings:
+          type: array
+          items:
+            type: object
+            required:
+              - index
+              - embedding
+            properties:
+              index:
+                type: integer
+                description: Index of the input text
+              embedding:
+                type: array
+                items:
+                  type: number
+                  format: float
+                minItems: 2048
+                maxItems: 2048
+              cache_hit:
+                type: boolean
+                description: Whether result came from cache
+        model:
+          type: string
+          description: Model used for embedding generation
+        usage:
+          type: object
+          properties:
+            total_tokens:
+              type: integer
+            cache_hits:
+              type: integer
+
+    HealthResponse:
+      type: object
+      required:
+        - status
+        - timestamp
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded, unhealthy]
+        timestamp:
+          type: string
+          format: date-time
+        version:
+          type: string
+        uptime_seconds:
+          type: integer
+        components:
+          type: object
+          properties:
+            vector_database:
+              $ref: '#/components/schemas/ComponentHealth'
+            embedding_service:
+              $ref: '#/components/schemas/ComponentHealth'
+            ingestion_pipeline:
+              $ref: '#/components/schemas/ComponentHealth'
+          additionalProperties:
+            $ref: '#/components/schemas/ComponentHealth'
+
+    ComponentHealth:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded, unhealthy]
+        response_time_ms:
+          type: number
+        last_check:
+          type: string
+          format: date-time
+        error_message:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+
+    MetricsResponse:
+      type: object
+      properties:
+        search_metrics:
+          type: object
+          properties:
+            total_searches:
+              type: integer
+            avg_latency_ms:
+              type: number
+            p95_latency_ms:
+              type: number
+            p99_latency_ms:
+              type: number
+            cache_hit_rate:
+              type: number
+        ingestion_metrics:
+          type: object
+          properties:
+            documents_processed:
+              type: integer
+            avg_processing_time_seconds:
+              type: number
+            queue_length:
+              type: integer
+            throughput_docs_per_minute:
+              type: number
+        vector_metrics:
+          type: object
+          properties:
+            total_vectors:
+              type: integer
+            storage_size_mb:
+              type: number
+            collection_count:
+              type: integer
+        system_metrics:
+          type: object
+          properties:
+            memory_usage_mb:
+              type: number
+            cpu_usage_percent:
+              type: number
+            disk_usage_mb:
+              type: number
+
+    ConfigurationResponse:
+      type: object
+      properties:
+        search:
+          type: object
+          properties:
+            hybrid_weights:
+              type: object
+              properties:
+                semantic:
+                  type: number
+                keyword:
+                  type: number
+            default_threshold:
+              type: number
+            max_results:
+              type: integer
+        ingestion:
+          type: object
+          properties:
+            chunk_size:
+              type: integer
+            chunk_overlap:
+              type: integer
+            max_concurrent_jobs:
+              type: integer
+        embedding:
+          type: object
+          properties:
+            model:
+              type: string
+            batch_size:
+              type: integer
+            cache_ttl_hours:
+              type: integer
+
+    ConfigurationUpdate:
+      type: object
+      properties:
+        search:
+          type: object
+          properties:
+            hybrid_weights:
+              type: object
+              properties:
+                semantic:
+                  type: number
+                  minimum: 0
+                  maximum: 1
+                keyword:
+                  type: number
+                  minimum: 0
+                  maximum: 1
+            default_threshold:
+              type: number
+              minimum: 0
+              maximum: 1
+        ingestion:
+          type: object
+          properties:
+            max_concurrent_jobs:
+              type: integer
+              minimum: 1
+              maximum: 20
+
+    PaginationInfo:
+      type: object
+      required:
+        - page
+        - limit
+        - total_pages
+      properties:
+        page:
+          type: integer
+          minimum: 1
+        limit:
+          type: integer
+          minimum: 1
+        total_pages:
+          type: integer
+          minimum: 0
+        has_next:
+          type: boolean
+        has_previous:
+          type: boolean
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+        - message
+      properties:
+        error:
+          type: string
+          description: Error code identifier
+        message:
+          type: string
+          description: Human-readable error message
+        details:
+          type: object
+          description: Additional error details
+          additionalProperties: true
+        timestamp:
+          type: string
+          format: date-time
+        trace_id:
+          type: string
+          description: Request trace identifier for debugging
+
+  responses:
+    BadRequest:
+      description: Invalid request parameters
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unauthorized:
+      description: Authentication required
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Forbidden:
+      description: Insufficient permissions
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    RateLimited:
+      description: Rate limit exceeded
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+          description: Seconds to wait before retrying
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    InternalError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+tags:
+  - name: Document Ingestion
+    description: Operations for ingesting documents into the RAG system
+  - name: Search
+    description: Semantic and hybrid search operations
+  - name: Vector Management
+    description: Direct vector database operations
+  - name: Embeddings
+    description: Text embedding generation
+  - name: Health
+    description: System health and monitoring
+  - name: Administration
+    description: Administrative operations and configuration
+
+externalDocs:
+  description: Contexter RAG System Documentation
+  url: https://docs.contexter.dev/rag-api
